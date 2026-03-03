@@ -14,12 +14,24 @@ from pathlib import Path
 
 
 def add_from_compile_order_file(
-    vunit_obj, compile_order_file, dependency_scan_defaultlib=True, fail_on_non_hdl_files=True
+    vunit_obj,
+    compile_order_file,
+    dependency_scan_defaultlib=True,
+    fail_on_non_hdl_files=True,
+    ignored_non_hdl_suffixes=(".mif", ".mem", ".coe"),
 ):  # pylint: disable=too-many-locals
     """
-    Add Vivado IP:s from a compile order file
+    Add Vivado IP:s from a compile order file.
+
+    Unknown non-HDL files are handled as follows:
+    - If their suffix is in ignored_non_hdl_suffixes, they are always ignored.
+    - Otherwise, fail_on_non_hdl_files controls whether to raise or ignore.
     """
-    compile_order, libraries, include_dirs = _read_compile_order(compile_order_file, fail_on_non_hdl_files)
+    compile_order, libraries, include_dirs = _read_compile_order(
+        compile_order_file,
+        fail_on_non_hdl_files,
+        ignored_non_hdl_suffixes=ignored_non_hdl_suffixes,
+    )
 
     # Create libraries
     for library_name in libraries:
@@ -83,7 +95,7 @@ def create_compile_order_file(project_file, compile_order_file, vivado_path=None
     )
 
 
-def _read_compile_order(file_name, fail_on_non_hdl_files):
+def _read_compile_order(file_name, fail_on_non_hdl_files, ignored_non_hdl_suffixes=(".mif", ".mem", ".coe")):
     """
     Read the compile order file and filter out duplicate files
     """
@@ -91,16 +103,28 @@ def _read_compile_order(file_name, fail_on_non_hdl_files):
     unique = set()
     include_dirs = set()
     libraries = set()
+    ignored_suffixes = {suffix.lower() for suffix in ignored_non_hdl_suffixes}
 
     with Path(file_name).open("r", encoding="utf-8") as ifile:
         for line in ifile.readlines():
             library_name, file_type, file_name = line.strip().split(",", 2)
 
-            # Accept VHDL, Verilog, Verilog Header, and SystemVerilog entries.
-            # "SystemVerilog" was added to support AMD IPs (e.g. SmartConnect PG247)
+            # Accept VHDL, Verilog, Verilog Header, and SystemVerilog from Vivado compile order.
+            # "SystemVerilog" is needed because some AMD IPs (for example SmartConnect)
             # whose Vivado-generated compile order lists .sv files with this file_type.
             # Without it, those entries would trigger the RuntimeError below.
+            #
+            # Vivado may also emit memory initialization payloads such as .mif, .mem,
+            # or .coe files. Those are data payloads, not HDL source files, so they
+            # are ignored when listed in ignored_non_hdl_suffixes.
+            #
+            # Any other unknown non-HDL file type still follows strict mode behavior:
+            # raise in strict mode, otherwise print and ignore.
             if file_type not in ("Verilog", "VHDL", "Verilog Header", "SystemVerilog"):
+                file_suffix = Path(file_name).suffix.lower()
+                if file_suffix in ignored_suffixes:
+                    print(f"Compile order file ignored: {file_name}")
+                    continue
                 if fail_on_non_hdl_files:
                     raise RuntimeError(f"Unsupported compile order file: {file_name}")
                 print(f"Compile order file ignored: {file_name}")
